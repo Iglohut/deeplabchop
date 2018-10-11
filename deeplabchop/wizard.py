@@ -271,8 +271,9 @@ class Gandalf():
         self.cfg = util.read_yaml(self.project / 'config.yaml')
         self.auto = 1 # For a while loop with all the commands later
         self.step = step # Could be auto or any of the steps
-        self.steps = ["Created", "CheckDirConfig", "CropAdjust", "FrameExtraction", "Annotated", "TrainLabelsDrawn",
-                      "Shuffled", "DeepCutReady", "Training", "Evaluated", "Inference"]
+        self.steps = ["Created", "CheckDirConfig", "CropAdjust", "FrameExtraction", "Annotated", "TrainingLabelsDrawn",
+                      "LabelsCollected", "Shuffled", "DeepCutReady", "Training", "Evaluated", "Inference"]
+        self.extracommands = ["GetImgSet"]
 
 
     def Created(self):
@@ -300,15 +301,40 @@ class Gandalf():
         util.update_yaml(self.project / 'status.yaml', {'CheckDirConfig': True})
 
 
+    def GetImgSet(self):
+        videopath = Path(input("What is the absolute path to your videos?: "))
+        if not videopath.exists():
+            print("Input path path doesn't exist! Given path:")
+            print("\n", videopath)
+
+        else:
+            xred = str(input("With how much pixels do you want to crop the x-axis?: "))
+            yred = str(input("With how much pixels do you want to crop the y-axis?: "))
+            vid_dict = {}
+            for v in videopath.resolve().glob("*"): # To ensure any fvideo file format. If there are nonvideos, you have a problem. Extend to multiple
+                vid_dict.update(self._video2imgset(v, xred, yred))
+
+            util.update_yaml(self.project / 'config.yaml', {'image_sets': vid_dict})
+
+
+    def _video2imgset(self, video, xred=0,yred=0):
+        vidstr = str(video)
+        vidname = vidstr.rsplit('/',1)[-1].rsplit(".",1)[0]
+        vid = {vidstr: {'crop': xred + "," + yred + ", -1,-1",
+                         'img_path': 'data/' + vidname}}
+        return vid
+
     def CropAdjust(self):
         # Check cropping configuration for videos
         # -------------------------------------------------------------------------------------------
-        if 'CropAdjust' not in self.project_status or not self.project_status['CropAdjust']:
+        # if 'CropAdjust' not in self.project_status or not self.project_status['CropAdjust']:
+        if self._shouldo('CropAdjust'):
             _echo('Checking video cropping configuration...')
 
             # Create directory for image sets
             if not len(self.cfg['image_sets']):
                 print('No videos given to create image sets. Stopping.')
+                print("\n Try using the wizard command GetImgSet to set image set to your project video folder.")
                 ## TODO for every video in /videos create img_sets .yaml file that has no crop and unique output -
                 self.auto = 0  # To stop wizard
                 return
@@ -335,7 +361,7 @@ class Gandalf():
     def FrameExtraction(self):
         # Extract images from all videos
         # -------------------------------------------------------------------------------------------
-        if 'FrameExtraction' not in self.project_status or not self.project_status['FrameExtraction']:
+        if self._shouldo('FrameExtraction'):
             _echo('Next up: Creating image sets...')
             num_frames = max(2, int(self.cfg['num_frames']) // len(self.cfg['image_sets']))
 
@@ -366,7 +392,7 @@ class Gandalf():
     def Annotated(self):
         # User annotation of joint position in image set
         # -------------------------------------------------------------------------------------------
-        if 'Annotated' not in self.project_status or not self.project_status['Annotated']:
+        if self._shouldo('Annotated'):
             do_labeling = input('Run labeling GUI? [Y/n]')
             if not do_labeling in ['N', 'n']:
                 GUI_utils.run_labeler(self.cfg, root=self.project)
@@ -392,15 +418,15 @@ class Gandalf():
             _echo('Image set annotations OK')
 
 
-    def TrainLabelsDrawn(self):
+    def TrainingLabelsDrawn(self):
         # Draw labels on images for verification
         # -------------------------------------------------------------------------------------------
-        if 'TrainingLabelsDrawn' not in self.project_status or not self.project_status['TrainingLabelsDrawn']:
+        if self._shouldo('TrainingLabelsDrawn'):
             _echo('Drawing labels on images in data sets for verification...')
             for n, (video, metadata) in enumerate(self.cfg['image_sets'].items()):
                 print(video, metadata)
                 label.draw_image_labels(self.project / metadata['img_path'] / 'multijoint.csv', self.cfg['joints'],
-                                        cmap_name=self.cfg['cmap'] if 'cmap' in cfg else None)
+                                        cmap_name=self.cfg['cmap'] if 'cmap' in self.cfg else None)
             util.update_yaml(self.project / 'status.yaml', {'TrainingLabelsDrawn': True})
             _echo('Labels drawn. Check labeled images in image set directories')
             self.auto = 0  # To stop wizard
@@ -412,7 +438,7 @@ class Gandalf():
     def LabelsCollected(self):
         # Join csv files of all image sets
         # -------------------------------------------------------------------------------------------
-        if 'LabelsCollected' not in self.project_status or not self.project_status['LabelsCollected']:
+        if self._shouldo('LabelsCollected'):
             _echo('Preparing combined label file...')
             label.combine_labels(self.project / 'data')
             util.update_yaml(self.project / 'status.yaml', {'LabelsCollected': True})
@@ -424,7 +450,7 @@ class Gandalf():
     def Shuffled(self):
         # Create shuffles
         # -------------------------------------------------------------------------------------------
-        if 'Shuffled' not in self.project_status or not self.project_status['Shuffled']:
+        if self._shouldo('Shuffled'):
             _echo('Shuffling and splitting training set')
             for n in trange(self.cfg['num_shuffles'], leave=False):
                 num_frames = int(self.cfg['num_frames'])
@@ -432,7 +458,7 @@ class Gandalf():
                 num_train = int(num_frames * f_train)
                 num_testing = num_frames - num_train
 
-                shuffle_name = 'shuffle{:03d}_{:.0f}pct-{}'.format(n, 100 * f_train, cfg['experimenter'])
+                shuffle_name = 'shuffle{:03d}_{:.0f}pct-{}'.format(n, 100 * f_train, self.cfg['experimenter'])
                 tqdm.write(shuffle_name)
 
                 labels_csv = self.project / 'data' / 'joint_labels.csv'
@@ -460,7 +486,7 @@ class Gandalf():
     def DeepCutReady(self):
         # Create directories and configuration files for pose-tensorflow (DeeperCut)
         # -------------------------------------------------------------------------------------------
-        if 'DeepCutReady' not in self.project_status or not self.project_status['DeepCutReady']:
+        if self._shouldo('DeepCutReady'):
             _echo('Training preparation...')
             # Create training and testing directories for each shuffle
             shuffles = [d.resolve() for d in self.project.joinpath('shuffles').glob('*') if d.is_dir()]
@@ -503,7 +529,7 @@ class Gandalf():
     def Training(self):
         # Training
         # -------------------------------------------------------------------------------------------
-        if 'Trained' not in self.project_status or not self.project_status['Trained'] or self.step == 'Training':
+        if self._shouldo('Trained'):
             _echo('Start training...')
             shuffles = [d.resolve() for d in self.project.joinpath('shuffles').glob('*') if d.is_dir()]
             util.update_yaml(self.project / 'status.yaml', {'Trained': True})
@@ -520,7 +546,7 @@ class Gandalf():
 
     def Evaluated(self):
         # Evaluation
-        if 'Evaluated' not in self.project_status or not self.project_status['Evaluated']:
+        if self._shouldo('Evaluated'):
             _echo('Evaluation trained models')
             self.auto = 0  # To stop wizard
             # return
@@ -530,12 +556,17 @@ class Gandalf():
 
     def Inference(self):
         # Inference
-        if 'ReadyForUse' not in self.project_status or not self.project_status['ReadForUse']:
+        if self._shouldo('ReadyForUse'):
             _echo('What is left to do?')
             self.auto = 0  # To stop wizard
             # return
         else:
             _echo('Use me!')
+
+    def _shouldo(self, step):
+        if step not in self.project_status or not self.project_status[step] or step==self.step:
+            return True
+        else: return False
 
 
     def __call__(self):
@@ -548,7 +579,7 @@ class Gandalf():
                     exec("self." + step + "()")
 
         else: # If specific step is given
-            if self.step not in self.steps:
+            if (self.step not in self.steps) and (self.step not in self.extracommands):
                 print("The step", self.step, "does not exist!")
 
             else: ## TODO if command is too far, tell 'em to do previous
